@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+env/
+venv/
+.venv/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+
+# OS / misc
+.DS_Store
+Thumbs.db
+
+# =========================
+# Model artifacts (DO NOT COMMIT)
+# =========================
+model/*.h5
+model/*.keras
+model/*.pt
+
+# =========================
+# Optional: test audio (recommended to ignore)
+# =========================
+audio/*.mp3
+audio/*.wav
+audio/*.flac
+audio/*.m4a
