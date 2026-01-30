@@ -27,9 +27,7 @@ Thumbs.db
 # =========================
 # Model artifacts (DO NOT COMMIT)
 # =========================
-model/*.h5
-model/*.keras
-model/*.pt
+
 
 # =========================
 # Optional: test audio (recommended to ignore)
