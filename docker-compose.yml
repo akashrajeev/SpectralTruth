@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: deepfake-audio-detector
+    ports:
+      - "8000:8000"
+    environment:
+      PORT: 8000
+      HOST: 0.0.0.0
+      WORKERS: 1
+      RELOAD: "false"
+      # MODEL_PATH: model/model-1.h5
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped

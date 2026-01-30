@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+env/
+venv/
+.venv/
+ENV/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS / misc
+.DS_Store
+Thumbs.db
+*.log
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Test files
+test_*.py
+*_test.py
+tests/
+
+# Development scripts
+command_line_model_tester.py
+audio_converter.py
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Documentation (keep README if needed)
+*.md
+!README.md
+
+# Audio test files (optional - exclude to reduce image size)
+audio/
+
+# Docker files (don't copy into itself)
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Temporary files
+*.tmp
+*.bak
+*.cache
