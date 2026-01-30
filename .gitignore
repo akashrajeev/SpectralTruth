@@ -34,7 +34,4 @@ model/*.pt
 # =========================
 # Optional: test audio (recommended to ignore)
 # =========================
-audio/*.mp3
-audio/*.wav
-audio/*.flac
-audio/*.m4a
+
