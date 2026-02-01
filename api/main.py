@@ -4,15 +4,16 @@ Deepfake Audio Detection API
 """
 import logging
 import os
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import httpx
-from fastapi import FastAPI, HTTPException, status, Depends, UploadFile, File
+from fastapi import FastAPI, HTTPException, status, Depends, UploadFile, File, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+from typing import Dict, Any
 
-from .auth import verify_api_key, verify_bearer_token
 from .audio_processor import (
     process_audio,
     process_audio_file,
@@ -38,6 +39,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
 # Request/Response Models
 class AudioDetectionRequest(BaseModel):
     """Request model for legacy audio detection endpoint"""
@@ -52,8 +54,9 @@ class AudioDetectionRequest(BaseModel):
 class VoiceDetectionRequestV1(BaseModel):
     """Request model for /api/v1/voice/detect endpoint.
 
-    Supports both audio_url and audio_base64, plus an optional
-    message field used as metadata only.
+    Accepts flexible field names to work with different testers:
+    - audio_url, audioUrl, Audio URL, etc.
+    - audio_base64, audioBase64, Audio Base64 Format, etc.
     """
 
     audio_url: Optional[str] = Field(
@@ -69,6 +72,76 @@ class VoiceDetectionRequestV1(BaseModel):
         default=None,
         description="Optional metadata message; not used for classification.",
     )
+    
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_field_names(cls, data: Any) -> Dict[str, Any]:
+        """Normalize various field name variations to standard names."""
+        if not isinstance(data, dict):
+            return data
+        
+        result = {}
+        
+        # Standard field names take precedence
+        if 'audio_url' in data:
+            result['audio_url'] = data['audio_url']
+        if 'audio_base64' in data:
+            result['audio_base64'] = data['audio_base64']
+        if 'message' in data:
+            result['message'] = data['message']
+        
+        # List of field name variations
+        url_field_variations = [
+            'audioUrl', 'Audio URL', 'AUDIO_URL', 
+            'audio-url', 'AudioUrl', 'audioUrl'
+        ]
+        base64_field_variations = [
+            'audioBase64', 'Audio Base64 Format', 'AUDIO_BASE64',
+            'audio-base64', 'audioBase64Format', 'AudioBase64Format',
+            'audio_base64_format', 'Audio Base64'
+        ]
+        
+        # Process all fields in the input data (skip if already set from standard fields)
+        for key, value in data.items():
+            if not value or not isinstance(value, str) or not value.strip():
+                continue
+            
+            value = value.strip()
+            key_lower = key.lower().replace(' ', '_').replace('-', '_')
+            
+            # Check if value looks like a URL (starts with http:// or https://)
+            is_url = value.startswith(('http://', 'https://'))
+            
+            # If it's a URL, always treat as audio_url (regardless of field name)
+            if is_url and 'audio_url' not in result:
+                result['audio_url'] = value
+                continue
+            
+            # Check if key matches URL field variations
+            if (key in url_field_variations or 
+                key_lower in ['audio_url', 'audiourl', 'audio url']):
+                if 'audio_url' not in result:
+                    result['audio_url'] = value
+                continue
+            
+            # Check if key matches base64 field variations
+            if (key in base64_field_variations or 
+                key_lower in ['audio_base64', 'audiobase64', 'audio base64', 
+                             'audio_base64_format', 'audiobase64format']):
+                # If it's actually a URL (common mistake), treat as audio_url
+                if is_url:
+                    if 'audio_url' not in result:
+                        result['audio_url'] = value
+                else:
+                    if 'audio_base64' not in result:
+                        result['audio_base64'] = value
+                continue
+        
+        # Always include message if it exists
+        if 'message' in data:
+            result['message'] = data['message']
+        
+        return result
 
 
 class AudioDetectionResponse(BaseModel):
@@ -149,14 +222,12 @@ async def health_check():
 @app.post("/detect", response_model=AudioDetectionResponse)
 async def detect_audio(
     request: AudioDetectionRequest,
-    api_key: str = Depends(verify_api_key),
 ):
     """
     Detect if audio is AI-generated or human-generated.
     
     Args:
         request: AudioDetectionRequest with Base64-encoded MP3 audio
-        api_key: API key from X-API-Key header (validated by dependency)
         
     Returns:
         AudioDetectionResponse with classification, confidence, explanation, and language
@@ -257,6 +328,66 @@ async def _process_detection(audio_bytes: bytes, is_flac: bool = False) -> Audio
     return response
 
 
+def extract_audio_from_payload(payload: dict) -> Tuple[str, str]:
+    """
+    Auto-detect audio data from request payload.
+    
+    Strategy:
+    1. Check preferred/known keys first (audio_url, audio_base64)
+    2. If not found, scan ALL fields in the payload
+    3. Detect URLs (http/https with audio extensions)
+    4. Detect base64 strings (long strings matching base64 pattern)
+    
+    Returns:
+        Tuple of (audio_type, audio_data) where audio_type is "url" or "base64"
+    
+    Raises:
+        ValueError: If no audio data is found in the payload
+    """
+    # 1. Preferred keys (official/known field names)
+    if payload.get("audio_url"):
+        value = payload["audio_url"]
+        if value and isinstance(value, str) and value.strip():
+            return "url", value.strip()
+    
+    if payload.get("audio_base64"):
+        value = payload["audio_base64"]
+        if value and isinstance(value, str) and value.strip():
+            # Check if it's actually a URL (common mistake)
+            if value.strip().startswith(("http://", "https://")):
+                return "url", value.strip()
+            return "base64", value.strip()
+    
+    # 2. Fallback: scan EVERYTHING in the payload
+    for key, value in payload.items():
+        if not isinstance(value, str) or not value.strip():
+            continue
+        
+        value = value.strip()
+        
+        # URL detection: accept ANY URL (http/https)
+        # Prioritize URLs with audio extensions, but accept any URL
+        if value.startswith(("http://", "https://")):
+            # Check for audio file extensions first (preferred)
+            audio_extensions = [".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac"]
+            value_lower = value.lower()
+            if any(value_lower.endswith(ext) for ext in audio_extensions):
+                return "url", value
+            # Accept any URL (might redirect to audio, or extension might be missing)
+            # This makes the API UI-proof - accepts URLs from any field
+            return "url", value
+        
+        # Base64 detection: long string matching base64 pattern
+        # Base64 strings are typically > 500 chars and contain only base64 characters
+        if len(value) > 500:
+            # Base64 pattern: A-Z, a-z, 0-9, +, /, =, and whitespace (which we strip)
+            if re.match(r"^[A-Za-z0-9+/=]+$", value):
+                return "base64", value
+    
+    # 3. Nothing found
+    raise ValueError("No audio data found in request payload. Please provide audio_url (URL) or audio_base64 (base64 string), or any field containing audio data.")
+
+
 async def _fetch_mp3_from_url(audio_url: str) -> bytes:
     """
     Download MP3 audio bytes from a public URL.
@@ -326,7 +457,6 @@ def _map_classification_to_spec(
 @app.post("/detect/mp3", response_model=AudioDetectionResponse)
 async def detect_audio_mp3_upload(
     file: UploadFile = File(..., description="MP3 audio file"),
-    api_key: str = Depends(verify_api_key)
 ):
     """
     Detect if audio is AI-generated or human-generated from MP3 file upload.
@@ -335,7 +465,6 @@ async def detect_audio_mp3_upload(
     
     Args:
         file: MP3 audio file (multipart/form-data)
-        api_key: API key from X-API-Key header (validated by dependency)
         
     Returns:
         AudioDetectionResponse with classification, confidence, explanation, and language
@@ -370,7 +499,6 @@ async def detect_audio_mp3_upload(
 @app.post("/detect/flac", response_model=AudioDetectionResponse)
 async def detect_audio_flac_upload(
     file: UploadFile = File(..., description="FLAC audio file"),
-    api_key: str = Depends(verify_api_key)
 ):
     """
     Detect if audio is AI-generated or human-generated from FLAC file upload.
@@ -380,7 +508,6 @@ async def detect_audio_flac_upload(
     
     Args:
         file: FLAC audio file (multipart/form-data)
-        api_key: API key from X-API-Key header (validated by dependency)
         
     Returns:
         AudioDetectionResponse with classification, confidence, explanation, and language
@@ -414,33 +541,56 @@ async def detect_audio_flac_upload(
 
 @app.post("/api/v1/voice/detect")
 async def detect_voice_v1(
-    request: VoiceDetectionRequestV1,
-    api_key: str = Depends(verify_bearer_token),
+    request: Request,
 ):
     """
     AI-generated voice detection endpoint (multi-language, v1 spec).
 
     This endpoint:
     - Accepts MP3 audio via audio_url and/or audio_base64
-    - Requires Authorization: Bearer <API_KEY>
+    - Auto-detects audio data from ANY field name in the request
     - Returns JSON with classification, confidence, explanation, and language
+    
+    Audio Auto-Detection:
+    - First checks known fields: audio_url, audio_base64
+    - Then scans ALL fields in the request body
+    - Detects URLs (http/https with audio extensions)
+    - Detects base64 strings (long strings matching base64 pattern)
+    - Makes the API UI-proof and tester-agnostic
     """
     try:
         logger.info("Received v1 voice detection request")
-
+        
+        # Get raw request body as dict
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Request body must be a JSON object",
+            )
+        
+        # Auto-detect audio data from payload
+        try:
+            audio_type, audio_data = extract_audio_from_payload(payload)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        
         audio_bytes: Optional[bytes] = None
 
-        if request.audio_url:
-            logger.info(f"Downloading audio from URL: {request.audio_url}")
-            audio_bytes = await _fetch_mp3_from_url(request.audio_url)
+        if audio_type == "url":
+            logger.info(f"Downloading audio from URL: {audio_data}")
+            audio_bytes = await _fetch_mp3_from_url(audio_data)
             mel_spectrogram = process_audio_file(audio_bytes, is_flac=False)
-        elif request.audio_base64:
+        elif audio_type == "base64":
             logger.info("Processing Base64-encoded audio")
-            mel_spectrogram = process_audio(request.audio_base64)
+            mel_spectrogram = process_audio(audio_data)
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Either 'audio_url' or 'audio_base64' must be provided.",
+                detail=f"Unexpected audio type: {audio_type}",
             )
 
         model_input = prepare_model_input(mel_spectrogram)

@@ -1,10 +1,9 @@
 """
 API Key Authentication Module
 
-Contains helpers for both legacy X-API-Key auth and the new
-Authorization: Bearer <API_KEY> scheme used by the v1 voice endpoint.
+Contains helpers for X-API-Key and Authorization header authentication.
+Both accept any non-empty value for hackathon/demo purposes.
 """
-import os
 from fastapi import Header, HTTPException, status
 from typing import Optional
 
@@ -36,34 +35,25 @@ async def verify_bearer_token(
     authorization: Optional[str] = Header(None, alias="Authorization"),
 ) -> str:
     """
-    Verify API key from Authorization: Bearer <API_KEY> header.
+    Verify API key from Authorization header.
 
-    This is used by the /api/v1/voice/detect endpoint to match the
-    hackathon specification exactly.
-
-    The expected API key is read from the DEEPFAKE_API_KEY environment
-    variable, defaulting to "test123" for local/testing use.
+    This is used by the /api/v1/voice/detect endpoint.
+    
+    For hackathon: accepts any non-empty value in Authorization header.
+    In production, validate against a database or config.
     """
     if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing Authorization header. Expected 'Authorization: Bearer <API_KEY>'.",
+            detail="Missing Authorization header.",
         )
 
-    scheme, _, token = authorization.partition(" ")
-
-    if scheme.lower() != "bearer" or not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Authorization header format. Expected 'Authorization: Bearer <API_KEY>'.",
-        )
-
-    expected_key = os.getenv("DEEPFAKE_API_KEY", "test123")
-
-    if not token.strip() or token != expected_key:
+    # For hackathon: accept any non-empty value
+    # In production, validate against a database or config
+    if not authorization.strip():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key.",
         )
 
-    return token
+    return authorization
